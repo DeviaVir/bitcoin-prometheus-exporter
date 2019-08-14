@@ -1,0 +1,11 @@
+services:
+  - docker
+language: go
+go:
+  - "1.12"
+
+script:
+  - 'if [ "${TRAVIS_BUILD_DIR}" != "${GOPATH}/src/github.com/DeviaVir/bitcoin-prometheus-exporter" ]; then ln -s "${TRAVIS_BUILD_DIR}" "${GOPATH}/src/github.com/DeviaVir/bitcoin-prometheus-exporter"; fi'
+  - make vendor
+  - make test
+  - make
