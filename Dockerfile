@@ -8,6 +8,7 @@ RUN mkdir -p /go/src/github.com/DeviaVir/bitcoin-prometheus-exporter
 COPY . /go/src/github.com/DeviaVir/bitcoin-prometheus-exporter
 
 RUN cd /go/src/github.com/DeviaVir/bitcoin-prometheus-exporter \
+ && go mod vendor \
  && go build \
       -mod vendor \
       -o /go/bin/bitcoin-prometheus-exporter
