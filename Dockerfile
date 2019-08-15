@@ -3,6 +3,8 @@ FROM golang:alpine AS builder
 ENV GO111MODULE="on"
 ENV CGO_ENABLED="0"
 
+RUN apk add --update git
+
 RUN mkdir -p /go/src/github.com/DeviaVir/bitcoin-prometheus-exporter
 
 COPY . /go/src/github.com/DeviaVir/bitcoin-prometheus-exporter
