@@ -13,3 +13,6 @@
 
 # vendor
 vendor/
+
+# pkg
+pkg/
