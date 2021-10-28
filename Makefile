@@ -15,11 +15,11 @@ GOTAGS ?=
 GOMAXPROCS ?= 8
 
 # Get the project metadata
-GOVERSION := 1.12
+GOVERSION := 1.17
 PROJECT := github.com/DeviaVir/bitcoin-prometheus-exporter
 OWNER := $(notdir $(patsubst %/,%,$(dir $(PROJECT))))
 NAME := $(notdir $(PROJECT))
-VERSION := 0.0.1
+VERSION := 0.0.2
 
 # Current system information
 GOOS ?= $(shell go env GOOS)
@@ -40,9 +40,6 @@ LD_FLAGS ?= \
 
 # List of tests to run
 TEST ?= ./...
-
-# Path to Terraform plugins
-PLUGIN_PATH ?= "${HOME}/.terraform.d/plugins"
 
 # Create a cross-compile target for every os-arch pairing. This will generate
 # a make target for each os/arch like "make linux/amd64" as well as generate a
@@ -97,18 +94,9 @@ vendor_update:
 	@$(MAKE) vendor
 .PHONY: vendor_update
 
-# dev builds and installs the plugin into ~/.terraform.d
-dev: vendor
-	@mkdir -p "${PLUGIN_PATH}"
-	@GO111MODULE=on go build \
-		-mod vendor \
-		-ldflags "${LD_FLAGS}" \
-		-tags "${GOTAGS}" \
-		-o "${PLUGIN_PATH}/bitcoin-prometheus-exporter"
-
 # test runs all tests
 test:
-	go test -i $(TEST) || exit 1
+	go test -v $(TEST) || exit 1
 	echo $(TEST) | \
 		xargs -t -n4 go test $(TESTARGS) -timeout=30s -parallel=4
 
