@@ -90,22 +90,22 @@ func init() {
 }
 
 func main() {
-	chain := getEnvDefault("BITCOIN_CHAIN", "bitcoin-mainnet")
-	bitcoinUser := getEnvDefault("BITCOIN_RPC_USER", "")
-	bitcoinPass := getEnvDefault("BITCOIN_RPC_PASS", "")
-	bitcoinHost := getEnvDefault("BITCOIN_RPC_HOST", "")
-	interval := getEnvDefault("BITCOIN_INTERVAL", "15")
+	chain := getEnvDefault("CHAIN", "bitcoin-mainnet")
+	user := getEnvDefault("RPC_USER", "")
+	password := getEnvDefault("RPC_PASS", "")
+	host := getEnvDefault("RPC_HOST", "")
+	interval := getEnvDefault("INTERVAL", "15")
 	listendAddr := getEnvDefault("HTTP_LISTENADDR", ":9112")
 	config := &rpcclient.ConnConfig{
-		Host:         bitcoinHost,
-		User:         bitcoinUser,
-		Pass:         bitcoinPass,
+		Host:         host,
+		User:         user,
+		Pass:         password,
 		DisableTLS:   true,
 		HTTPPostMode: true,
 	}
 	client, err := rpcclient.New(config, nil)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	defer client.Shutdown()
 
