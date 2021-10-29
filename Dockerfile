@@ -1,4 +1,4 @@
-FROM golang:alpine AS builder
+FROM golang:1.17-alpine AS builder
 
 ENV GO111MODULE="on"
 ENV CGO_ENABLED="0"
@@ -15,6 +15,6 @@ RUN cd /go/src/github.com/DeviaVir/bitcoin-prometheus-exporter \
       -mod vendor \
       -o /go/bin/bitcoin-prometheus-exporter
 
-FROM alpine
-COPY --from=builder /go/bin/bitcoin-prometheus-exporter /usr/local/bin/bitcoin-prometheus-exporter
-CMD ["/usr/local/bin/bitcoin-prometheus-exporter"]
+FROM gcr.io/distroless/base-debian11
+COPY --from=builder /go/bin/bitcoin-prometheus-exporter /
+CMD ["/bitcoin-prometheus-exporter"] 

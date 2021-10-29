@@ -1,9 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/prometheus/client_golang/prometheus"
@@ -11,13 +12,35 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func getEnv(name string) string {
-	envValue, ok := os.LookupEnv(name)
-	if ok {
-		return envValue
-	}
-	panic(fmt.Sprintf("Missing environment variable: %s", name))
-}
+var (
+	blockCountGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "block_count",
+			Help:      "The local blockchain length",
+		}, []string{
+			"chain",
+		})
+	rawMempoolSizeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "raw_mempool_size",
+			Help:      "The number of txes in rawmempool",
+		}, []string{
+			"chain",
+		})
+	connectedPeersGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "connected_peers",
+			Help:      "The number of connected peers",
+		}, []string{
+			"chain",
+		})
+)
 
 func getEnvDefault(name string, defaultVal string) string {
 	envValue, ok := os.LookupEnv(name)
@@ -27,56 +50,67 @@ func getEnvDefault(name string, defaultVal string) string {
 	return defaultVal
 }
 
-func setGauge(name string, help string, callback func() float64) {
-	gaugeFunc := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: "bitcoind",
-		Subsystem: "blockchain",
-		Name:      name,
-		Help:      help,
-	}, callback)
-	prometheus.MustRegister(gaugeFunc)
+func loop(client *rpcclient.Client, chain string, interval string) {
+	intInterval, err := strconv.Atoi(interval)
+	if err != nil {
+		logrus.Error(err)
+		intInterval = 15
+	}
+
+	for range time.Tick((time.Second * time.Duration(intInterval))) {
+		blockCount, err := client.GetBlockCount()
+		if err != nil {
+			logrus.Error(err)
+		}
+		blockCount64 := float64(blockCount)
+		mempoolSize, err := client.GetRawMempool()
+		if err != nil {
+			panic(err)
+		}
+		mempoolSize64 := float64(len(mempoolSize))
+		peerInfo, err := client.GetPeerInfo()
+		if err != nil {
+			panic(err)
+		}
+		peerInfo64 := float64(len(peerInfo))
+
+		blockCountGauge.WithLabelValues(chain).Set(blockCount64)
+		rawMempoolSizeGauge.WithLabelValues(chain).Set(mempoolSize64)
+		connectedPeersGauge.WithLabelValues(chain).Set(peerInfo64)
+	}
+}
+
+func init() {
+	logrus.SetOutput(os.Stdout)
+	logrus.SetLevel(logrus.InfoLevel)
+
+	prometheus.MustRegister(blockCountGauge)
+	prometheus.MustRegister(rawMempoolSizeGauge)
+	prometheus.MustRegister(connectedPeersGauge)
 }
 
 func main() {
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
-	liquidUser := getEnv("BITCOIN_RPC_USER")
-	liquidPass := getEnv("BITCOIN_RPC_PASS")
-	liquidHost := getEnv("BITCOIN_RPC_HOST")
+	chain := getEnvDefault("CHAIN", "bitcoin-mainnet")
+	user := getEnvDefault("RPC_USER", "")
+	password := getEnvDefault("RPC_PASS", "")
+	host := getEnvDefault("RPC_HOST", "")
+	interval := getEnvDefault("INTERVAL", "15")
 	listendAddr := getEnvDefault("HTTP_LISTENADDR", ":9112")
 	config := &rpcclient.ConnConfig{
-		Host:         liquidHost,
-		User:         liquidUser,
-		Pass:         liquidPass,
+		Host:         host,
+		User:         user,
+		Pass:         password,
 		DisableTLS:   true,
 		HTTPPostMode: true,
 	}
 	client, err := rpcclient.New(config, nil)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	defer client.Shutdown()
-	setGauge("block_count", "The local blockchain length", func() float64 {
-		blockCount, err := client.GetBlockCount()
-		if err != nil {
-			panic(err)
-		}
-		return float64(blockCount)
-	})
-	setGauge("raw_mempool_size", "The number of txes in rawmempool", func() float64 {
-		hashes, err := client.GetRawMempool()
-		if err != nil {
-			panic(err)
-		}
-		return float64(len(hashes))
-	})
-	setGauge("connected_peers", "The number of connected peers", func() float64 {
-		peerInfo, err := client.GetPeerInfo()
-		if err != nil {
-			panic(err)
-		}
-		return float64(len(peerInfo))
-	})
+
+	go loop(client, chain, interval)
+
 	http.Handle("/metrics", promhttp.Handler())
 	logrus.Info("Now listening on ", listendAddr)
 	logrus.Fatal(http.ListenAndServe(listendAddr, nil))
