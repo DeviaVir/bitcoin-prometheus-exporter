@@ -40,6 +40,25 @@ var (
 		}, []string{
 			"chain",
 		})
+	loadedWalletFailureCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "wallet_errors",
+			Help:      "Failures to load wallets",
+		}, []string{
+			"chain",
+		})
+	balanceWalletsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "wallet_balance",
+			Help:      "The balance on the selected wallet",
+		}, []string{
+			"chain",
+			"wallet",
+		})
 )
 
 func getEnvDefault(name string, defaultVal string) string {
@@ -50,7 +69,7 @@ func getEnvDefault(name string, defaultVal string) string {
 	return defaultVal
 }
 
-func loop(client *rpcclient.Client, chain string, interval string) {
+func loop(client *rpcclient.Client, chain, interval, wallet string) {
 	intInterval, err := strconv.Atoi(interval)
 	if err != nil {
 		logrus.Error(err)
@@ -73,6 +92,15 @@ func loop(client *rpcclient.Client, chain string, interval string) {
 			panic(err)
 		}
 		peerInfo64 := float64(len(peerInfo))
+		if wallet != "UNDEFINED" {
+			balance, err := client.GetBalance(wallet)
+			if err != nil {
+				logrus.Debugln(err)
+				loadedWalletFailureCounter.WithLabelValues(chain).Inc()
+			} else {
+				balanceWalletsGauge.WithLabelValues(chain, wallet).Set(float64(balance))
+			}
+		}
 
 		blockCountGauge.WithLabelValues(chain).Set(blockCount64)
 		rawMempoolSizeGauge.WithLabelValues(chain).Set(mempoolSize64)
@@ -87,6 +115,8 @@ func init() {
 	prometheus.MustRegister(blockCountGauge)
 	prometheus.MustRegister(rawMempoolSizeGauge)
 	prometheus.MustRegister(connectedPeersGauge)
+	prometheus.MustRegister(loadedWalletFailureCounter)
+	prometheus.MustRegister(balanceWalletsGauge)
 }
 
 func main() {
@@ -96,6 +126,7 @@ func main() {
 	host := getEnvDefault("RPC_HOST", "")
 	interval := getEnvDefault("INTERVAL", "15")
 	listendAddr := getEnvDefault("HTTP_LISTENADDR", ":9112")
+	wallet := getEnvDefault("WALLET", "UNDEFINED") // Do not use `""` as default, default wallet is empty string.
 	config := &rpcclient.ConnConfig{
 		Host:         host,
 		User:         user,
@@ -109,7 +140,7 @@ func main() {
 	}
 	defer client.Shutdown()
 
-	go loop(client, chain, interval)
+	go loop(client, chain, interval, wallet)
 
 	http.Handle("/metrics", promhttp.Handler())
 	logrus.Info("Now listening on ", listendAddr)
