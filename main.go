@@ -98,6 +98,8 @@ func requestRPC(url, jsonStr string) map[string]interface{} {
 
 	if v, ok := data["error"].(map[string]interface{}); ok {
 		if v["code"] != nil {
+			logrus.Debugln(url)
+			logrus.Debugln(jsonStr)
 			logrus.Debugln(string(body))
 			return nil
 		}
@@ -131,10 +133,11 @@ func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 		peerInfo64 := float64(len(peerInfo))
 		if wallet != "UNDEFINED" {
 			jsonStr := `{"jsonrpc":"1.0","id":"bitcoin-prometheus-exporter","method":"getbalance","params":["*", 1]}`
+			walletUrl := url
 			if wallet != "" {
-				url = url + "/wallet/" + wallet
+				walletUrl = fmt.Sprintf("%s/wallet/%s", url, wallet)
 			}
-			data := requestRPC(url, jsonStr)
+			data := requestRPC(walletUrl, jsonStr)
 			if data == nil {
 				loadedWalletFailureCounter.WithLabelValues(chain).Inc()
 			} else {
@@ -166,6 +169,7 @@ func init() {
 }
 
 func main() {
+
 	chain := getEnvDefault("CHAIN", "bitcoin-mainnet")
 	user := getEnvDefault("RPC_USER", "")
 	password := getEnvDefault("RPC_PASS", "")
