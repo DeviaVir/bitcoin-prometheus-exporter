@@ -15,11 +15,11 @@ GOTAGS ?=
 GOMAXPROCS ?= 8
 
 # Get the project metadata
-GOVERSION := 1.17
+GOVERSION := 1.19
 PROJECT := github.com/DeviaVir/bitcoin-prometheus-exporter
 OWNER := $(notdir $(patsubst %/,%,$(dir $(PROJECT))))
 NAME := $(notdir $(PROJECT))
-VERSION := 0.0.2
+VERSION := 0.0.4
 
 # Current system information
 GOOS ?= $(shell go env GOOS)
