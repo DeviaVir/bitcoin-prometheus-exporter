@@ -19,7 +19,7 @@ GOVERSION := 1.19
 PROJECT := github.com/DeviaVir/bitcoin-prometheus-exporter
 OWNER := $(notdir $(patsubst %/,%,$(dir $(PROJECT))))
 NAME := $(notdir $(PROJECT))
-VERSION := 0.0.4
+VERSION := 0.0.5
 
 # Current system information
 GOOS ?= $(shell go env GOOS)

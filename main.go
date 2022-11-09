@@ -95,6 +95,14 @@ func requestRPC(url, jsonStr string) map[string]interface{} {
 		logrus.WithError(err).Error("Error unmarshalling response")
 		return nil
 	}
+
+	if v, ok := data["error"].(map[string]interface{}); ok {
+		if v["code"] != nil {
+			logrus.Debugln(string(body))
+			return nil
+		}
+	}
+
 	return data
 }
 
@@ -122,13 +130,21 @@ func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 		}
 		peerInfo64 := float64(len(peerInfo))
 		if wallet != "UNDEFINED" {
-			jsonStr := `{"jsonrpc":"1.0","id":"curltest","method":"getbalance","params":["*", 6]}`
-			data := requestRPC(fmt.Sprintf("%s/wallet/%s", url, wallet), jsonStr)
+			jsonStr := `{"jsonrpc":"1.0","id":"bitcoin-prometheus-exporter","method":"getbalance","params":["*", 1]}`
+			if wallet != "" {
+				url = url + "/wallet/" + wallet
+			}
+			data := requestRPC(url, jsonStr)
 			if data == nil {
 				loadedWalletFailureCounter.WithLabelValues(chain).Inc()
 			} else {
-				balance := data["result"].(float64)
-				balanceWalletsGauge.WithLabelValues(chain, wallet).Set(balance)
+				if v, ok := data["result"].(float64); ok {
+					balanceWalletsGauge.WithLabelValues(chain, wallet).Set(v)
+				}
+
+				if v, ok := data["result"].(map[string]interface{}); ok {
+					balanceWalletsGauge.WithLabelValues(chain, wallet).Set(v["bitcoin"].(float64))
+				}
 			}
 		}
 
