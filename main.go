@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -69,7 +73,32 @@ func getEnvDefault(name string, defaultVal string) string {
 	return defaultVal
 }
 
-func loop(client *rpcclient.Client, chain, interval, wallet string) {
+func requestRPC(url, jsonStr string) map[string]interface{} {
+	jsonBytes := []byte(jsonStr)
+	request, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		logrus.WithError(err).Error("Error creating request")
+		return nil
+	}
+	request.Header.Set("content-type", "application/json")
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		logrus.WithError(err).Error("Error executing client")
+		return nil
+	}
+	defer response.Body.Close()
+
+	body, _ := io.ReadAll(response.Body)
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		logrus.WithError(err).Error("Error unmarshalling response")
+		return nil
+	}
+	return data
+}
+
+func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 	intInterval, err := strconv.Atoi(interval)
 	if err != nil {
 		logrus.Error(err)
@@ -93,12 +122,13 @@ func loop(client *rpcclient.Client, chain, interval, wallet string) {
 		}
 		peerInfo64 := float64(len(peerInfo))
 		if wallet != "UNDEFINED" {
-			balance, err := client.GetBalance(wallet)
-			if err != nil {
-				logrus.Debugln(err)
+			jsonStr := `{"jsonrpc":"1.0","id":"curltest","method":"getbalance","params":["*", 6]}`
+			data := requestRPC(fmt.Sprintf("%s/wallet/%s", url, wallet), jsonStr)
+			if data == nil {
 				loadedWalletFailureCounter.WithLabelValues(chain).Inc()
 			} else {
-				balanceWalletsGauge.WithLabelValues(chain, wallet).Set(float64(balance))
+				balance := data["result"].(float64)
+				balanceWalletsGauge.WithLabelValues(chain, wallet).Set(balance)
 			}
 		}
 
@@ -110,7 +140,7 @@ func loop(client *rpcclient.Client, chain, interval, wallet string) {
 
 func init() {
 	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
+	logrus.SetLevel(logrus.DebugLevel)
 
 	prometheus.MustRegister(blockCountGauge)
 	prometheus.MustRegister(rawMempoolSizeGauge)
@@ -140,7 +170,10 @@ func main() {
 	}
 	defer client.Shutdown()
 
-	go loop(client, chain, interval, wallet)
+	// URL for custom RPC calls.
+	url := fmt.Sprintf("http://%s:%s@%s", user, password, host)
+
+	go loop(client, url, chain, interval, wallet)
 
 	http.Handle("/metrics", promhttp.Handler())
 	logrus.Info("Now listening on ", listendAddr)

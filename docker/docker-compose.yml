@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  bitcoin:
+    image: "blockstream/bitcoind:22.0"
+    ports:
+      - "18444:18444"
+    volumes:
+      - ./bitcoin.conf:/root/.bitcoin/conf/bitcoin.conf
+      - ./data/bitcoin:/root/.bitcoin
+    command: ["bitcoind", "--conf=/root/.bitcoin/conf/bitcoin.conf"]
+  elements:
+    image: "blockstream/elementsd:0.21.0.2"
+    ports:
+      - "18891:18891"
+    volumes:
+      - ./elements.conf:/root/.elements/conf/elements.conf
+      - ./data/elements:/root/.elements
+    command: ["elementsd", "-conf=/root/.elements/conf/elements.conf"]
+  tor:
+    image: "dperson/torproxy"
+    ports:
+      - "9051:9050"
