@@ -119,16 +119,19 @@ func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 		blockCount, err := client.GetBlockCount()
 		if err != nil {
 			logrus.Error(err)
+			break
 		}
 		blockCount64 := float64(blockCount)
 		mempoolSize, err := client.GetRawMempool()
 		if err != nil {
-			panic(err)
+			logrus.Error(err)
+			break
 		}
 		mempoolSize64 := float64(len(mempoolSize))
 		peerInfo, err := client.GetPeerInfo()
 		if err != nil {
-			panic(err)
+			logrus.Error(err)
+			break
 		}
 		peerInfo64 := float64(len(peerInfo))
 		if wallet != "UNDEFINED" {
