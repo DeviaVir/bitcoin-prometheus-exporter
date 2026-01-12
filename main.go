@@ -102,7 +102,7 @@ var (
 			Namespace: "blockchain",
 			Subsystem: "collector",
 			Name:      "peer_lowest_fee_filter_sats_per_vbyte",
-			Help:      "Lowest fee filter advertised by any peer, in sats/vbyte",
+			Help:      "Lowest fee filter advertised by any peer, in sats/vbyte; -1 when no peer fee filters are available",
 		}, []string{
 			"chain",
 		})
