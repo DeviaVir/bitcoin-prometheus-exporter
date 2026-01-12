@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -15,6 +16,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 )
+
+const satoshisPerBTC = 1e8
 
 var (
 	blockCountGauge = prometheus.NewGaugeVec(
@@ -63,7 +66,88 @@ var (
 			"chain",
 			"wallet",
 		})
+	peerMinFeeRateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "peer_min_fee_rate_sats_per_vbyte",
+			Help:      "Minimum feerate each peer will accept (minfeefilter/feefilter), expressed in sats/vbyte",
+		}, []string{
+			"chain",
+			"peer",
+			"direction",
+			"type",
+		})
+	// NOTE: peer label carries remote address and can churn; monitor cardinality in Prom.
+	peerLowFeeFilterPeersGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "peer_low_fee_filter_peers",
+			Help:      "Number of peers whose fee filter is at or below this node's min relay tx fee",
+		}, []string{
+			"chain",
+		})
+	peerLowFeeIssueGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "peer_low_fee_filter_issue",
+			Help:      "1 when no peers accept transactions at the node's min relay tx fee; otherwise 0",
+		}, []string{
+			"chain",
+		})
+	lowestPeerFeeFilterGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "peer_lowest_fee_filter_sats_per_vbyte",
+			Help:      "Lowest fee filter advertised by any peer, in sats/vbyte",
+		}, []string{
+			"chain",
+		})
+	nodeMinRelayFeeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "node_min_relay_fee_rate_sats_per_vbyte",
+			Help:      "Node minimum relay tx fee (prefers getmempoolinfo.minrelaytxfee, otherwise relayfee), in sats/vbyte",
+		}, []string{
+			"chain",
+		})
+	nodeMempoolMinFeeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "blockchain",
+			Subsystem: "collector",
+			Name:      "node_mempool_min_fee_rate_sats_per_vbyte",
+			Help:      "Current mempool minimum feerate (mempoolminfee), in sats/vbyte",
+		}, []string{
+			"chain",
+		})
 )
+
+// peerInfoResult mirrors the subset of fields we need from Bitcoin Core's getpeerinfo RPC.
+// It captures fee filters and connection metadata used to populate exporter metrics.
+type peerInfoResult struct {
+	ID             int32   `json:"id"`
+	Addr           string  `json:"addr"`
+	AddrLocal      string  `json:"addrlocal,omitempty"`
+	Inbound        bool    `json:"inbound"`
+	MinFeeFilter   float64 `json:"minfeefilter,omitempty"`
+	FeeFilter      float64 `json:"feefilter,omitempty"`
+	RelayTxes      bool    `json:"relaytxes"`
+	Services       string  `json:"services"`
+	Network        string  `json:"network,omitempty"`
+	ConnectionType string  `json:"connection_type,omitempty"`
+}
+
+// mempoolFeeInfo holds fee-related fields from getmempoolinfo.
+type mempoolFeeInfo struct {
+	MinRelayTxFee float64 `json:"minrelaytxfee"`
+	MempoolMinFee float64 `json:"mempoolminfee"`
+	MaxMempool    float64 `json:"maxmempool"`
+	Loaded        bool    `json:"loaded"`
+}
 
 func getEnvDefault(name string, defaultVal string) string {
 	envValue, ok := os.LookupEnv(name)
@@ -108,6 +192,60 @@ func requestRPC(url, jsonStr string) map[string]interface{} {
 	return data
 }
 
+// btcPerKVByteToSatPerVByte converts a fee rate expressed in BTC/kvByte to sats/vByte.
+func btcPerKVByteToSatPerVByte(fee float64) float64 {
+	if fee <= 0 {
+		return 0
+	}
+	return fee * satoshisPerBTC / 1000
+}
+
+// feeFilterToSatPerVByte normalizes peer fee filters to sats/vByte.
+// Newer nodes expose minfeefilter (BTC/kvB); older ones expose feefilter, which may be BTC/kvB (<1) or sat/kvB (>=1).
+// We handle both representations to keep compatibility across Core versions. A feefilter of exactly 1.0 is ambiguous (1 BTC/kvB vs 1 sat/kvB);
+// we treat >=1 as sat/kvB, which is acceptable given typical fee ranges.
+func feeFilterToSatPerVByte(peer peerInfoResult) float64 {
+	switch {
+	case peer.MinFeeFilter > 0:
+		return btcPerKVByteToSatPerVByte(peer.MinFeeFilter)
+	case peer.FeeFilter > 0:
+		if peer.FeeFilter < 1 {
+			return btcPerKVByteToSatPerVByte(peer.FeeFilter)
+		}
+		return peer.FeeFilter / 1000
+	default:
+		return 0
+	}
+}
+
+func getPeerInfo(client *rpcclient.Client) ([]peerInfoResult, error) {
+	raw, err := client.RawRequest("getpeerinfo", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var peers []peerInfoResult
+	if err := json.Unmarshal(raw, &peers); err != nil {
+		return nil, err
+	}
+
+	return peers, nil
+}
+
+func getMempoolFeeInfo(client *rpcclient.Client) (mempoolFeeInfo, error) {
+	raw, err := client.RawRequest("getmempoolinfo", nil)
+	if err != nil {
+		return mempoolFeeInfo{}, err
+	}
+
+	var info mempoolFeeInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return mempoolFeeInfo{}, err
+	}
+
+	return info, nil
+}
+
 func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 	intInterval, err := strconv.Atoi(interval)
 	if err != nil {
@@ -128,12 +266,72 @@ func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 			continue
 		}
 		mempoolSize64 := float64(len(mempoolSize))
-		peerInfo, err := client.GetPeerInfo()
+		peerInfo, err := getPeerInfo(client)
 		if err != nil {
 			logrus.Error(err)
 			continue
 		}
-		peerInfo64 := float64(len(peerInfo))
+		networkInfo, err := client.GetNetworkInfo()
+		if err != nil {
+			logrus.Error(err)
+			continue
+		}
+		mempoolFees, err := getMempoolFeeInfo(client)
+		mempoolInfoOK := err == nil
+		if err != nil {
+			logrus.WithError(err).Warn("Unable to fetch mempool fee info; falling back to relay fee only")
+		}
+
+		nodeMinRelaySatVByte := btcPerKVByteToSatPerVByte(networkInfo.RelayFee)
+		if mempoolInfoOK && mempoolFees.MinRelayTxFee > 0 {
+			nodeMinRelaySatVByte = btcPerKVByteToSatPerVByte(mempoolFees.MinRelayTxFee)
+		}
+		mempoolMinFeeSatVByte := 0.0
+		if mempoolInfoOK {
+			mempoolMinFeeSatVByte = btcPerKVByteToSatPerVByte(mempoolFees.MempoolMinFee)
+		}
+
+		compatiblePeers := 0
+		lowestPeerFeeFilter := math.MaxFloat64
+
+		peerMinFeeRateGauge.Reset()
+		for _, peer := range peerInfo {
+			peerMinFeeRate := feeFilterToSatPerVByte(peer)
+			direction := "outbound"
+			if peer.Inbound {
+				direction = "inbound"
+			}
+			peerType := peer.ConnectionType
+			if peerType == "" {
+				peerType = "unknown"
+			}
+
+			peerMinFeeRateGauge.WithLabelValues(chain, peer.Addr, direction, peerType).Set(peerMinFeeRate)
+
+			if peerMinFeeRate > 0 && peerMinFeeRate < lowestPeerFeeFilter {
+				lowestPeerFeeFilter = peerMinFeeRate
+			}
+
+			if nodeMinRelaySatVByte > 0 && peerMinFeeRate > 0 && peerMinFeeRate <= nodeMinRelaySatVByte {
+				compatiblePeers++
+			}
+		}
+
+		lowestValue := -1.0
+		if lowestPeerFeeFilter != math.MaxFloat64 {
+			lowestValue = lowestPeerFeeFilter
+		}
+		lowestPeerFeeFilterGauge.WithLabelValues(chain).Set(lowestValue)
+		peerLowFeeFilterPeersGauge.WithLabelValues(chain).Set(float64(compatiblePeers))
+		peerLowFeeIssueGauge.WithLabelValues(chain).Set(0)
+		if nodeMinRelaySatVByte > 0 && len(peerInfo) > 0 && compatiblePeers == 0 {
+			peerLowFeeIssueGauge.WithLabelValues(chain).Set(1)
+		}
+
+		nodeMinRelayFeeGauge.WithLabelValues(chain).Set(nodeMinRelaySatVByte)
+		if mempoolInfoOK {
+			nodeMempoolMinFeeGauge.WithLabelValues(chain).Set(mempoolMinFeeSatVByte)
+		}
 		if wallet != "UNDEFINED" {
 			jsonStr := `{"jsonrpc":"1.0","id":"bitcoin-prometheus-exporter","method":"getbalance","params":["*", 1]}`
 			walletUrl := url
@@ -156,7 +354,7 @@ func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 
 		blockCountGauge.WithLabelValues(chain).Set(blockCount64)
 		rawMempoolSizeGauge.WithLabelValues(chain).Set(mempoolSize64)
-		connectedPeersGauge.WithLabelValues(chain).Set(peerInfo64)
+		connectedPeersGauge.WithLabelValues(chain).Set(float64(len(peerInfo)))
 	}
 }
 
@@ -169,6 +367,12 @@ func init() {
 	prometheus.MustRegister(connectedPeersGauge)
 	prometheus.MustRegister(loadedWalletFailureCounter)
 	prometheus.MustRegister(balanceWalletsGauge)
+	prometheus.MustRegister(peerMinFeeRateGauge)
+	prometheus.MustRegister(peerLowFeeFilterPeersGauge)
+	prometheus.MustRegister(peerLowFeeIssueGauge)
+	prometheus.MustRegister(lowestPeerFeeFilterGauge)
+	prometheus.MustRegister(nodeMinRelayFeeGauge)
+	prometheus.MustRegister(nodeMempoolMinFeeGauge)
 }
 
 func main() {
