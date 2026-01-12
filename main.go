@@ -102,7 +102,7 @@ var (
 			Namespace: "blockchain",
 			Subsystem: "collector",
 			Name:      "peer_lowest_fee_filter_sats_per_vbyte",
-			Help:      "Lowest fee filter advertised by any peer, in sats/vbyte",
+			Help:      "Lowest fee filter advertised by any peer, in sats/vbyte; -1 when no peer fee filters are available",
 		}, []string{
 			"chain",
 		})
@@ -147,6 +147,11 @@ type mempoolFeeInfo struct {
 	MempoolMinFee float64 `json:"mempoolminfee"`
 	MaxMempool    float64 `json:"maxmempool"`
 	Loaded        bool    `json:"loaded"`
+}
+
+type networkInfoResult struct {
+	RelayFee float64         `json:"relayfee"`
+	Warnings json.RawMessage `json:"warnings,omitempty"`
 }
 
 func getEnvDefault(name string, defaultVal string) string {
@@ -232,6 +237,20 @@ func getPeerInfo(client *rpcclient.Client) ([]peerInfoResult, error) {
 	return peers, nil
 }
 
+func getNetworkFeeInfo(client *rpcclient.Client) (networkInfoResult, error) {
+	raw, err := client.RawRequest("getnetworkinfo", nil)
+	if err != nil {
+		return networkInfoResult{}, err
+	}
+
+	var info networkInfoResult
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return networkInfoResult{}, err
+	}
+
+	return info, nil
+}
+
 func getMempoolFeeInfo(client *rpcclient.Client) (mempoolFeeInfo, error) {
 	raw, err := client.RawRequest("getmempoolinfo", nil)
 	if err != nil {
@@ -271,7 +290,7 @@ func loop(client *rpcclient.Client, url, chain, interval, wallet string) {
 			logrus.Error(err)
 			continue
 		}
-		networkInfo, err := client.GetNetworkInfo()
+		networkInfo, err := getNetworkFeeInfo(client)
 		if err != nil {
 			logrus.Error(err)
 			continue
